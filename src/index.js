@@ -1,172 +1,168 @@
 /**
- *
- *  @name DiscordTickets
- *  @author eartharoid <contact@eartharoid.me>
- *  @license GNU-GPLv3
- *
- * DiscordTickets  Copyright (C) 2020  Isaac "eartharoid" Saunders
- * This program comes with ABSOLUTELY NO WARRANTY.
- * This is free software, and you are welcome to redistribute it
- * under certain conditions. See the included LICENSE file for details.
- *
+ * DiscordTickets
+ * Copyright (C) 2021 Isaac Saunders
+ * 
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * 
+ * @name @eartharoid/discord-tickets
+ * @description An open-source Discord bot for ticket management
+ * @copyright 2021 Isaac Saunders
+ * @license GNU-GPLv3
  */
 
-const version = Number(process.version.split('.')[0].replace('v', ''));
-if (!version === 12 || !version > 12) return console.log('Please upgrade to Node v12 or higher');
+const node_version = Number(process.versions.node.split('.')[0]);
+if (node_version < 14)
+	return console.log(`Error: DiscordTickets does not work on Node v${node_version}. Please upgrade to v14 or above.`);
 
 const fs = require('fs');
-const { join } = require('path');
+const { path } = require('./utils/fs');
 
-let dev = fs.existsSync(join(__dirname, '../user/dev.env')) && fs.existsSync(join(__dirname, '../user/dev.config.js'));
+const checkFile = (file, example) => {
 
-require('dotenv').config({ path: join(__dirname, '../user/', dev ? 'dev.env' : '.env') });
+	file = path(file);
+	example = path(example);
 
-module.exports.config = dev ? 'dev.config.js' : 'config.js';
-const config = require(join(__dirname, '../user/', module.exports.config));
-
-const Discord = require('discord.js');
-const client = new Discord.Client({
-	autoReconnect: true,
-	partials: ['MESSAGE', 'CHANNEL', 'REACTION'],
-});
-client.events = new Discord.Collection();
-client.commands = new Discord.Collection();
-client.cooldowns = new Discord.Collection();
-const utils = require('./modules/utils');
-const leeks = require('leeks.js');
-
-require('./modules/banner')(leeks); // big coloured text thing
-
-const Logger = require('leekslazylogger');
-const log = new Logger({
-	name: config.name,
-	logToFile: config.logs.files.enabled,
-	maxAge: config.logs.files.keep_for,
-	debug: config.debug
-});
-
-require('./modules/updater')(); // check for updates
-
-/**
- * storage
- */
-const { Sequelize, Model, DataTypes } = require('sequelize');
-
-let sequelize;
-
-switch (config.storage.type) {
-case 'mysql':
-	log.info('Connecting to MySQL database...');
-	sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASS, {
-		dialect: 'mysql',
-		host: process.env.DB_HOST,
-		logging: log.debug
-	});
-	break;
-case 'mariadb':
-	log.info('Connecting to MariaDB database...');
-	sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASS, {
-		dialect: 'mariadb',
-		host: process.env.DB_HOST,
-		logging: log.debug
-	});
-	break;
-case 'postgre':
-	log.info('Connecting to PostgreSQL database...');
-	sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASS, {
-		dialect: 'postgres',
-		host: process.env.DB_HOST,
-		logging: log.debug
-	});
-	break;
-case 'microsoft':
-	log.info('Connecting to Microsoft SQL Server database...');
-	sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASS, {
-		dialect: 'mssql',
-		host: process.env.DB_HOST,
-		logging: log.debug
-	});
-	break;
-default:
-	log.info('Using SQLite storage');
-	sequelize = new Sequelize({
-		dialect: 'sqlite',
-		storage: join(__dirname, '../user/storage.db'),
-		logging: log.debug
-	});
-}
-
-class Ticket extends Model {}
-Ticket.init({
-	channel: DataTypes.STRING,
-	creator: DataTypes.STRING,
-	open: DataTypes.BOOLEAN,
-	topic: DataTypes.TEXT
-}, {
-	sequelize,
-	modelName: 'ticket'
-});
-
-class Setting extends Model {}
-Setting.init({
-	key: DataTypes.STRING,
-	value: DataTypes.STRING,
-}, {
-	sequelize,
-	modelName: 'setting'
-});
-
-Ticket.sync();
-Setting.sync();
-
-/**
- * event loader
- */
-const events = fs.readdirSync(join(__dirname, 'events')).filter(file => file.endsWith('.js'));
-for (const file of events) {
-	const event = require(`./events/${file}`);
-	client.events.set(event.event, event);
-	// client.on(event.event, e => client.events.get(event.event).execute(client, e, Ticket, Setting));
-	client.on(event.event, (e1, e2) => client.events.get(event.event).execute(client, [e1, e2], {config, Ticket, Setting}));
-	log.console(log.format(`> Loaded &7${event.event}&f event`));
-}
-
-/**
- * command loader
- */
-const commands = fs.readdirSync(join(__dirname, 'commands')).filter(file => file.endsWith('.js'));
-for (const file of commands) {
-	const command = require(`./commands/${file}`);
-	client.commands.set(command.name, command);
-	log.console(log.format(`> Loaded &7${config.prefix}${command.name}&f command`));
-}
-
-log.info(`Loaded ${events.length} events and ${commands.length} commands`);
-
-const one_day = 1000 * 60 * 60 * 24;
-const txt = '../user/transcripts/text';
-const clean = () => {
-	const files = fs.readdirSync(join(__dirname, txt)).filter(file => file.endsWith('.txt'));
-	let total = 0;
-	for (const file of files) {
-		let diff = (new Date() - new Date(fs.statSync(join(__dirname, txt, file)).mtime));
-		if (Math.floor(diff / one_day) > config.transcripts.text.keep_for) {
-			fs.unlinkSync(join(__dirname, txt, file));
-			total++;
-		}
+	if (fs.existsSync(file)) return true;
+	if (!fs.existsSync(example)) {
+		console.log(`Error: '${file}' not found, and unable to create it due to '${example}' being missing`);
+		return process.exit();
 	}
-	if (total > 0) log.info(`Deleted ${total} old text ${utils.plural('transcript', total)}`);
+
+	console.log(`Copying '${example}' to '${file}'`);
+	fs.copyFileSync(example, file);
+	return false;
+
 };
 
-if (config.transcripts.text.enabled) {
-	clean();
-	setInterval(clean, one_day);
+if (!checkFile('./.env', './example.env')) {
+	console.log('Please set your bot\'s token in \'.env\'');
+	process.exit();
 }
 
+checkFile('./user/config.js', './user/example.config.js');
+
+require('dotenv').config({
+	path: path('./.env')
+});
+
+const config = require('../user/config');
+
+require('./banner')();
+
+const log = require('./logger');
+
+const { selectPresence } = require('./utils/discord');
+const I18n = require('@eartharoid/i18n');
+const CommandManager = require('./modules/commands/manager');
+const PluginManager = require('./modules/plugins/manager');
+const TicketManager = require('./modules/tickets');
+
+require('./modules/structures')(); // load extended structures before creating the client
+
+const {
+	Client,
+	Intents
+} = require('discord.js');
+
+/**
+ * The bot client
+ * @extends {Client}
+ */
+class Bot extends Client {
+	constructor() {
+		super({
+			partials: [
+				'MESSAGE',
+				'CHANNEL',
+				'REACTION'
+			],
+			presence: selectPresence(),
+			ws: {
+				intents: Intents.NON_PRIVILEGED,
+			}
+		});
+		
+		(async () => {
+			/** The global bot configuration */
+			this.config = config;
+
+			/** A sequelize instance */
+			this.db = await require('./database')(log), // this.db.models.Ticket...
+
+			/** A leekslazylogger instance */
+			this.log = log;
+
+			/** An @eartharoid/i18n instance */
+			this.i18n = new I18n(path('./src/locales'), 'en-GB');
+
+			this.setMaxListeners(this.config.max_listeners); // set the max listeners for each event
+	
+			require('./updater')(this); // check for updates
+			require('./modules/listeners')(this); // load internal listeners
+
+			/** The ticket manager */
+			this.tickets = new TicketManager(this);
+
+			/** The command manager, used by internal and plugin commands */
+			this.commands = new CommandManager(this);
+
+			/** The plugin manager */
+			this.plugins = new PluginManager(this);
+			this.plugins.load(); // load plugins
+
+			this.log.info('Connecting to Discord API...');
+
+			this.login();
+		})();
+	}
+
+	async postStats() {
+		/**
+		 * OH NO, TELEMETRY!?
+		 * Relax, it just counts how many people are using DiscordTickets.
+		 * You can see the source here: https://github.com/discord-tickets/stats
+		 */
+		if (this.config.super_secret_setting) { // you can disable it if you really want
+			const fetch = require('node-fetch');
+			let tickets = await this.db.models.Ticket.count();
+			fetch(`https://stats.discordtickets.app/client?id=${this.user.id}&tickets=${tickets}`, {
+				method: 'post',
+			}).catch(e => {
+				// fail quietly, it doesn't really matter if it didn't work
+				this.log.debug(e);
+			});
+			this.guilds.cache.forEach(async g => {
+				let members = (await g.fetch()).approximateMemberCount;
+				fetch(`https://stats.discordtickets.app/guild?id=${g.id}&members=${members}`, {
+					method: 'post',
+				}).catch(e => {
+					this.log.debug(e);
+				});
+			});
+		}
+	}
+
+}
+
+new Bot();
+
+const { version } = require('../package.json');
 process.on('unhandledRejection', error => {
+	log.notice('PLEASE INCLUDE THIS INFORMATION IF YOU ASK FOR HELP ABOUT THE FOLLOWING ERROR:');
+	log.notice(`Discord Tickets v${version}, Node v${process.versions.node} on ${process.platform}`);
 	log.warn('An error was not caught');
-	log.warn(`Uncaught ${error.name}: ${error.message}`);
+	if (error instanceof Error) log.warn(`Uncaught ${error.name}`);
 	log.error(error);
 });
 
-client.login(process.env.TOKEN);
